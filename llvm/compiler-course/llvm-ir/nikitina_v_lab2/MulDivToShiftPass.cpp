@@ -1,3 +1,4 @@
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -14,8 +15,9 @@ struct MulDivToShiftPass : PassInfoMixin<MulDivToShiftPass> {
     bool Changed = false;
 
     for (auto &BB : F) {
-      for (auto I = BB.begin(), E = BB.end(); I != E;) {
-        Instruction *Inst = &*I++;
+      for (Instruction &InstRef : make_early_inc_range(BB)) {
+        Instruction *Inst = &InstRef;
+
         auto *BO = dyn_cast<BinaryOperator>(Inst);
         if (!BO)
           continue;
@@ -45,9 +47,7 @@ struct MulDivToShiftPass : PassInfoMixin<MulDivToShiftPass> {
             BO->eraseFromParent();
             Changed = true;
           }
-        }
-
-        else if (BO->getOpcode() == Instruction::UDiv) {
+        } else if (BO->getOpcode() == Instruction::UDiv) {
           if (auto *CI = dyn_cast<ConstantInt>(RHS)) {
             if (CI->getValue().isStrictlyPositive() &&
                 CI->getValue().isPowerOf2()) {
@@ -60,15 +60,29 @@ struct MulDivToShiftPass : PassInfoMixin<MulDivToShiftPass> {
               Changed = true;
             }
           }
-        }
-
-        else if (BO->getOpcode() == Instruction::SDiv) {
+        } else if (BO->getOpcode() == Instruction::SDiv) {
           if (auto *CI = dyn_cast<ConstantInt>(RHS)) {
             if (CI->getValue().isStrictlyPositive() &&
                 CI->getValue().isPowerOf2()) {
-              uint64_t ShiftVal = CI->getValue().logBase2();
-              Value *ShiftConst = ConstantInt::get(CI->getType(), ShiftVal);
-              Value *NewInst = Builder.CreateAShr(LHS, ShiftConst, "ashr_opt");
+              uint64_t ShiftAmount = CI->getValue().logBase2();
+              Type *Ty = BO->getType();
+
+              APInt OffsetMask =
+                  APInt::getLowBitsSet(CI->getBitWidth(), ShiftAmount);
+
+              Value *Zero = ConstantInt::get(Ty, 0);
+              Value *OffsetConst = ConstantInt::get(Ty, OffsetMask);
+              Value *ShiftConst = ConstantInt::get(Ty, ShiftAmount);
+
+              Value *IsNeg = Builder.CreateICmpSLT(LHS, Zero, "is_neg");
+
+              Value *Offset =
+                  Builder.CreateSelect(IsNeg, OffsetConst, Zero, "sdiv_offset");
+
+              Value *AdjustedLHS = Builder.CreateAdd(LHS, Offset, "adjusted_x");
+
+              Value *NewInst =
+                  Builder.CreateAShr(AdjustedLHS, ShiftConst, "ashr_opt");
 
               BO->replaceAllUsesWith(NewInst);
               BO->eraseFromParent();
