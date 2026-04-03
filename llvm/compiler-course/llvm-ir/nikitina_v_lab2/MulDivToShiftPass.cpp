@@ -66,24 +66,17 @@ struct MulDivToShiftPass : PassInfoMixin<MulDivToShiftPass> {
                 CI->getValue().isPowerOf2()) {
               uint64_t ShiftAmount = CI->getValue().logBase2();
               Type *Ty = BO->getType();
-
               APInt OffsetMask =
                   APInt::getLowBitsSet(CI->getBitWidth(), ShiftAmount);
-
               Value *Zero = ConstantInt::get(Ty, 0);
               Value *OffsetConst = ConstantInt::get(Ty, OffsetMask);
               Value *ShiftConst = ConstantInt::get(Ty, ShiftAmount);
-
               Value *IsNeg = Builder.CreateICmpSLT(LHS, Zero, "is_neg");
-
               Value *Offset =
                   Builder.CreateSelect(IsNeg, OffsetConst, Zero, "sdiv_offset");
-
               Value *AdjustedLHS = Builder.CreateAdd(LHS, Offset, "adjusted_x");
-
               Value *NewInst =
                   Builder.CreateAShr(AdjustedLHS, ShiftConst, "ashr_opt");
-
               BO->replaceAllUsesWith(NewInst);
               BO->eraseFromParent();
               Changed = true;
